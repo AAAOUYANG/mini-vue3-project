@@ -184,6 +184,10 @@ verify
 - **跨域**：后端没有配 CORS，所以开发期走 Vite 代理（`/api` → `http://localhost:8080`，并 rewrite 掉 `/api`）。
   想直接连后端而不走代理，把 `.env.development` 的 `VITE_API_BASE_URL` 改成 `http://localhost:8080`，
   同时给后端加 `@CrossOrigin` 或全局 CORS 配置。
+- **走网关时不要 rewrite `/api`**：`vite.config.js` 默认会把 `/api` 前缀去掉（上面那种"直连某个后端服务"的用法）。
+  但后端的网关对外路由本身就是 `/api/user/**`，去前缀是网关自己 StripPrefix 干的，代理层再删一次就会 404。
+  想在本机开发时对齐容器化部署的链路，这样启动：
+  `BACKEND_ORIGIN=http://127.0.0.1:9000 BACKEND_KEEP_API_PREFIX=true npm run dev`。
 - **`password` 是只写字段**：`UserDTO` 上标了 `@JsonProperty(WRITE_ONLY)`，详情/列表接口都不会返回密码，
   所以编辑弹窗的密码框永远留空，留空时前端直接把该字段丢掉（后端 `updateById` 会忽略 `null`，不会清空密码）。
 - **`default-property-inclusion: non_null`**：值为 `null` 的字段整个键都不输出，
@@ -291,3 +295,145 @@ python3 verify/verify_pagination.py      # 阶段 B：20 项
 | 滚动加载更多（追加模式） |
 | --- |
 | ![加载更多](verify/screenshots/13-append-after.png) |
+
+---
+
+## 七、容器化部署（nginx + Nacos）与 Jenkins 流水线
+
+前六节都是"本机 `npm run dev`"的开发形态。这一节是**部署形态**：前端跑在 nginx 容器里，
+**后端地址不写在代码里、也不写在镜像里，而是放在 Nacos 配置中心**，由容器启动时取。
+
+### 1. 为什么后端地址要放到配置中心
+
+`VITE_API_BASE_URL` 是 Vite 的**构建期常量**，一旦设成绝对地址就会被烤进 `dist/assets/*.js`，
+结果是"换一个后端地址就得重新构建前端"。所以部署形态这样做：
+
+- 构建期只固定**相对路径** `/api`（`Dockerfile` 里 `ENV VITE_API_BASE_URL=/api`）；
+- 浏览器永远只发 `/api/**`；
+- 真实后端地址由托管它的 nginx 在**容器启动时**从 Nacos 读，再据此生成 `/api` 的反代规则。
+
+于是：**改后端地址 = 改配置中心 + 重启容器，不需要重新构建前端**。
+
+### 2. 配置项（Nacos）
+
+| 项 | 值 |
+| --- | --- |
+| dataId | `mini-frontend.yaml` |
+| group | `DEFAULT_GROUP` |
+| 命名空间 | 环境名（`dev` / `prod`，命名空间 id 刻意就是环境名） |
+
+```yaml
+frontend:
+  env-label: dev                             # 回成响应头 X-Frontend-Env，用来确认"读的是哪个环境"
+  backend-origin: http://mini-gateway:9000   # nginx 把 /api/** 原样转发到这里
+  proxy-timeout: 30                          # 反代超时（秒）
+```
+
+源文件放在**后端仓库**里，和它的其它配置统一由 `publish-config.sh` 发布：
+`mini-spring-boot-project/docker/infra/nacos/config/env/<环境>/mini-frontend.yaml`。
+
+### 3. 怎么起
+
+```bash
+# ① 基础设施（MySQL + Nacos + Jenkins）+ 发布配置
+cd ../mini-spring-boot-project/docker/infra && docker compose up -d
+
+# ② 后端 dev 环境（网关 / 用户 / 订单）
+cd ../../mini-spring-boot-project
+APP_ENV=dev IMAGE_TAG=local docker compose -f docker/app/docker-compose.yml up -d
+
+# ③ 前端（--env-file 必须带：compose 的 ${...} 插值只认 shell 环境变量和 --env-file）
+cd ../mini-vue3-project/docker
+docker compose --env-file env/dev.env up -d --build
+```
+
+起来之后：
+
+```bash
+curl -I http://127.0.0.1:5300/
+# HTTP/1.1 200 OK
+# X-Frontend-Env: dev
+# X-Backend-Origin: http://mini-gateway:9000      ← 这个值来自 Nacos
+
+curl "http://127.0.0.1:5300/api/user/page?pageNum=1&pageSize=1"
+# {"code":0,...}      ← 浏览器 → nginx → 网关 → 用户服务
+```
+
+宿主端口：dev `5300`、prod `5301`（写在 `docker/env/<环境>.env` 里，同机可以分别起）。
+
+### 4. 文件都在哪
+
+```text
+Dockerfile                                      # 两阶段：node:22-alpine 构建 → nginx:alpine 托管
+.dockerignore                                   # 排除 node_modules/dist（否则宿主目录会盖掉容器里的依赖）
+docker/docker-compose.yml                       # 前端容器；引用外部网络 mini-net
+docker/env/dev.env / prod.env                   # 环境名 + 宿主端口（换环境只换这个文件）
+docker/nginx/templates/default.conf.template    # nginx 模板，三个 ${...} 由启动脚本填
+docker/nginx/docker-entrypoint.d/10-nacos-config.sh   # 启动时读 Nacos → 渲染 nginx 配置
+```
+
+### 5. 两个真踩过的坑（脚本注释里都写了）
+
+- **`envsubst` 是独立进程，只认环境变量**：脚本里 `FOO=$(...)` 之后必须显式 `export FOO`，
+  否则模板里的 `${FOO}` 会被替换成空串，nginx 启动直接报
+  `invalid number of arguments in "proxy_pass"`。
+- **`/api` 前缀不能删**：网关对外路由本身就是 `/api/user/**`，去前缀由网关自己的 StripPrefix 负责；
+  nginx 再删一次就是 404。本机 `npm run dev` 的代理默认会删，走网关时用
+  `BACKEND_KEEP_API_PREFIX=true` 保留。
+
+还有一个**在 Nacos 控制台手工建配置时**的坑：控制台的 Monaco 编辑器对自动化逐行输入
+会触发 YAML 自动缩进，缩进会一行行越缩越深（内容就非法了）。人工**粘贴**没问题；
+或者直接跑发布脚本（推荐，内容与仓库一致且幂等）。
+
+### 6. Jenkins 流水线
+
+Jenkins 里现在有四个任务，前端两个与后端**同构**：
+
+| 任务 | 环境 | 做什么 |
+| --- | --- | --- |
+| `mini-vue3-frontend-dev` | dev（任务名推导） | 构建镜像 → 产物自检 →（勾 `DEPLOY`）重建本地容器并冒烟 |
+| `mini-vue3-frontend-prod` | prod | 三道闸门 → 人工审批 → 把同一镜像晋级为 `:prod`（本阶段不部署） |
+
+环境**不是参数**：任务名决定（`JOB_NAME.endsWith('-prod')`）——参数能被改写，任务名不能。
+环境差异也不在流水线里，而在 `docker/env/<环境>.env` + Nacos 命名空间，所以 dev 与 prod
+产出的是同一个镜像，prod 只是把 dev 验过的产物晋级。
+
+prod 三道闸门：
+
+1. 工作区必须干净，且**不能站在 main/master 分支**（前端改动走独立分支）；
+2. 产物必须"环境无关"：Dockerfile 固定相对基址、产物里出现 `/api` 常量、不出现绝对 api 基址、
+   `baseURL` 不是绝对地址 —— 挡住"把后端地址烤进 bundle"这种最危险的失误；
+3. 人工审批之后才打 `:prod` 指针。
+
+> 前端**没有单测**（`package.json` 只有 dev/build/preview），所以流水线不造一个假的测试阶段：
+> 构建交给 Dockerfile 一次做完，流水线只做镜像构建 + 产物校验 + 部署冒烟。
+> 以后要加单测，在 Dockerfile 里加一步即可，流水线结构不用动。
+
+流水线定义是本仓库根目录的 `Jenkinsfile`，由后端仓库的 JCasC
+（`docker/infra/jenkins/casc/jenkins.yaml`）在 Jenkins 进程内读入并内联成 job ——
+改 Jenkinsfile 后需要重新应用 JCasC（重启 jenkins 容器）才生效。
+
+**操作上的一个坑**：声明式流水线的 `parameters` 要**先跑过一次构建**才会注册到任务上，
+所以新建任务后第一次只能点「立即构建」（按默认参数跑），之后才会出现「Build with Parameters」。
+
+### 7. 本次部署与界面走查的证据（`verify/deploy/`）
+
+| Nacos 控制台（dev 命名空间） | 配置内容（启动脚本就从这里取值） |
+| --- | --- |
+| ![控制台](verify/deploy/01-nacos-console.png) | ![配置](verify/deploy/04-nacos-config-fixed.png) |
+
+| 首页（自带后端连通性自检） | 用户列表 |
+| --- | --- |
+| ![首页](verify/deploy/06-backend-selfcheck.png) | ![列表](verify/deploy/07-user-list.png) |
+
+| 条件查询 | 新增表单 | 编辑回填 |
+| --- | --- | --- |
+| ![查询](verify/deploy/08-search-alice.png) | ![新增](verify/deploy/10-create-filled.png) | ![编辑](verify/deploy/13-edit-form.png) |
+
+| 删除二次确认 | Jenkins 前端任务 | 参数化构建 |
+| --- | --- | --- |
+| ![删除](verify/deploy/15-delete-confirm.png) | ![任务](verify/deploy/17-jenkins-frontend-job.png) | ![参数](verify/deploy/19-jenkins-params-checked.png) |
+
+| prod 闸门①拦下脏工作区 | prod 停在人工审批 | 审批后晋级 `:prod` |
+| --- | --- | --- |
+| ![闸门一](verify/deploy/22-jenkins-prod-gate1.png) | ![审批](verify/deploy/23-jenkins-prod-approval.png) | ![晋级](verify/deploy/24-jenkins-prod-approved.png) |
