@@ -1,0 +1,11 @@
+node_modules
+dist
+dist-ssr
+.git
+.gitignore
+.idea
+.vscode
+verify
+README.md
+*.log
+.DS_Store

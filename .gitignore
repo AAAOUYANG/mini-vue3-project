@@ -11,3 +11,5 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+# playwright-cli 的页面快照目录（自动化验证时生成，不进版本库）
+.playwright-cli

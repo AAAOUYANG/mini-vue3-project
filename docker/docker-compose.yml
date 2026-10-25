@@ -1,0 +1,62 @@
+name: mini-vue3-frontend
+
+# ============================================================================
+# 前端容器：nginx 托管构建好的静态文件，并把 /api 反代到**配置中心给的**后端地址。
+#
+# 与后端共用外部网络 mini-net（由 docker/infra 创建），所以后端地址可以直接写服务名
+# mini-gateway —— 这个地址本身也来自 Nacos（mini-frontend.yaml），不写在这个文件里。
+#
+# 用法（后端先起）：
+#   cd docker/infra && docker compose up -d                                # 基础设施 + 发布配置
+#   APP_ENV=dev IMAGE_TAG=local docker compose -f docker/app/docker-compose.yml up -d
+#   # 本目录：前端（--env-file 必须带，见下面「环境来源」）
+#   docker compose --env-file env/dev.env up -d --build
+#
+# 环境来源只有一处：docker/env/<环境>.env 里的 APP_ENV。
+# 它同时就是 Nacos 命名空间名（命名空间 id 刻意用环境名，而不是 UUID，就是为了直接对上）。
+# 切环境 = 换 --env-file 重启容器，镜像不用换。端口也在这个文件里（dev 5300 / prod 5301）。
+#
+# 为什么端口要参数化：dev 与 prod 若都固定 5300，同机同时跑必然撞端口；
+# 后端也是这么分的（18081 / 18082）。
+#
+# 跨 compose 文件没法用 depends_on 表达依赖，所以启动顺序由入口脚本自己兜：
+# 它会对 Nacos 重试 60 秒，取不到配置就**拒绝启动**（不给兜底地址）。
+# ============================================================================
+
+services:
+  mini-frontend:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: mini-frontend:${IMAGE_TAG:?IMAGE_TAG 未设置：请显式传 IMAGE_TAG（如 IMAGE_TAG=local）}
+    container_name: mini-frontend
+    restart: unless-stopped
+    # 注入容器的变量（APP_ENV / FRONTEND_HOST_PORT）。
+    # 注意：env_file 只影响容器内环境，**不参与**上面的 ${...} 插值 ——
+    # 插值靠 shell 或 --env-file，所以启动命令必须显式带上 --env-file。
+    env_file:
+      - ./env/${APP_ENV:?APP_ENV 未设置：请用 --env-file env/dev.env 或 env/prod.env}.env
+    environment:
+      # 容器内必须用服务名，写 127.0.0.1 会连到容器自己
+      NACOS_ADDR: nacos:8848
+      # 命名空间 id = 环境名，和 backend 的 publish-config.sh 创建命名空间时用的是同一个名字
+      NACOS_NAMESPACE: ${APP_ENV:?APP_ENV 未设置：请用 --env-file env/dev.env 或 env/prod.env}
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      # dev 默认 5300（与 npm run dev 默认端口一致，两者不要同时开）；prod 用 5301
+      - "127.0.0.1:${FRONTEND_HOST_PORT:-5300}:80"
+    healthcheck:
+      # nginx:alpine 里没有 curl，用 busybox 的 wget 探活
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    networks:
+      - mini-net
+
+networks:
+  # 由 docker/infra/docker-compose.yml 创建，这里只引用，不负责创建
+  mini-net:
+    external: true
+    name: mini-net
