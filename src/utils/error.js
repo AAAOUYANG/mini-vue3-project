@@ -13,11 +13,15 @@ export function resolveErrorMessage(error) {
   // 请求已发出，但没等到响应：后端没启动、端口不对、被代理拦截
   if (error.code === 'ECONNABORTED') return `请求超时：${error.config?.url ?? ''}`
   if (error.code === 'ERR_NETWORK') {
-    return '连不上后端服务，请确认 mini-spring-boot-project 已在 http://localhost:8080 启动'
+    return '连不上后端服务，请确认 mini-spring-cloud-project 的网关已在 http://localhost:9000 启动'
   }
 
   const body = error.response?.data
   if (body && typeof body === 'object' && body.message) return body.message
+  // 有响应但响应体是空的：多半是开发代理转发失败（目标没起来），不是后端自己报的错
+  if (error.response?.status && !body) {
+    return `请求失败（HTTP ${error.response.status}，无响应体）：请确认代理目标（网关 http://localhost:9000）已启动`
+  }
   if (error.response?.status) return `请求失败（HTTP ${error.response.status}）`
   return error.message || '请求失败'
 }

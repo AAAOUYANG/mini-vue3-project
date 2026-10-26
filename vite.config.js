@@ -2,20 +2,19 @@ import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
-// 后端 mini-spring-boot-project 默认跑在 http://localhost:8080，且没有配置 CORS，
-// 所以开发期统一走 Vite 代理：浏览器请求 /api/user/page -> 代理到 http://localhost:8080/user/page。
-// 这样前端代码里只出现 /api 前缀，不用关心跨域，也不用改后端。
-const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN || 'http://localhost:8080'
+// 后端是 mini-spring-cloud-project：**网关 mini-gateway 是唯一入口**，本机跑在 http://localhost:9000，
+// 前端只发相对路径 /api/**，跨域由 Vite 代理解决（后端没配 CORS）。
+// 网关对外路由本身就是 /api/user/**，去前缀由网关自己的 StripPrefix 做，所以默认**保留** /api 前缀。
+const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN || 'http://localhost:9000'
 
 /**
- * 是否给 /api 去掉前缀（默认去掉，保持原有行为：直连某个后端服务，/api 只是本地的代理前缀）。
+ * 是否给 /api 去掉前缀。默认 **true（保留）**，与网关路由对齐：
+ * 代理层删掉 /api 会变成 /user/page 打到网关，网关没有这条路由 → 直接 404。
  *
- * 走**网关**时必须保留：mini-spring-boot-project 的网关对外路由本来就是 /api/user/**，
- * 去前缀由网关自己的 StripPrefix 做，代理层再删一次会变成 /user/page 打到网关、直接 404。
- * 本项目的容器化部署走的就是网关（地址由 nginx 启动时从 Nacos 取），开发期想对齐它：
- *   BACKEND_ORIGIN=http://127.0.0.1:9000 BACKEND_KEEP_API_PREFIX=true npm run dev
+ * 只有"绕过网关直连某个后端服务"时才需要删（那些服务的路由是 /user/**）：
+ *   BACKEND_ORIGIN=http://127.0.0.1:18081 BACKEND_KEEP_API_PREFIX=false npm run dev
  */
-const KEEP_API_PREFIX = process.env.BACKEND_KEEP_API_PREFIX === 'true'
+const KEEP_API_PREFIX = process.env.BACKEND_KEEP_API_PREFIX !== 'false'
 
 /**
  * 开发服务器（dev）和预览服务器（preview）都要打到后端，但 Vite 的 preview **不继承** server.proxy，
@@ -26,7 +25,7 @@ const apiProxy = {
   '/api': {
     target: BACKEND_ORIGIN,
     changeOrigin: true,
-    // 默认去掉 /api 前缀：/api/user/page -> /user/page；走网关时用 BACKEND_KEEP_API_PREFIX=true 保留
+    // 默认保留 /api（与网关路由一致）；BACKEND_KEEP_API_PREFIX=false 时删掉，用于直连后端服务
     ...(KEEP_API_PREFIX ? {} : { rewrite: (path) => path.replace(/^\/api/, '') })
   }
 }

@@ -4,6 +4,13 @@ import useMainStore from '@/store/modules/main'
 import { resolveErrorMessage } from '@/utils/error'
 import { BASE_URL, SUCCESS_CODE, TIME_OUT } from './config'
 
+/** 取响应头：axios 的 AxiosHeaders 实例用 get()，普通对象直接索引 */
+function readHeader(headers, name) {
+  if (!headers) return ''
+  const value = typeof headers.get === 'function' ? headers.get(name) : headers[name]
+  return value || ''
+}
+
 /**
  * 网络请求类：只负责"发请求 + 拆统一响应体 + 归一化错误"。
  *
@@ -32,10 +39,17 @@ class HyRequest {
       }
     )
 
-    // 响应拦截：关闭全局 loading，并校验统一响应体格式
+    // 响应拦截：关闭全局 loading、采集部署信息，并校验统一响应体格式
     this.instance.interceptors.response.use(
       (response) => {
-        useMainStore().finishLoading()
+        const mainStore = useMainStore()
+        mainStore.finishLoading()
+        // 容器化部署时这两个头由 nginx 加上（值来自 Nacos），页脚据此显示真实后端地址；
+        // 本机 npm run dev 没有它们，页脚回落到开发代理的说明
+        mainStore.setDeployInfo({
+          backendOrigin: readHeader(response.headers, 'x-backend-origin'),
+          frontendEnv: readHeader(response.headers, 'x-frontend-env')
+        })
         const body = response.data
         if (!body || typeof body !== 'object' || !('code' in body)) {
           return Promise.reject(new Error(`响应格式不符合 ApiResponse 约定：${response.config.url}`))

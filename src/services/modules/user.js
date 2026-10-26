@@ -1,7 +1,8 @@
 import hyRequest from '@/services/request'
 
 /**
- * 用户模块接口（对接 mini-spring-boot-project 的 UserController，前缀 /user）。
+ * 用户模块接口（对接 mini-spring-cloud-project 的 mini-user-service，服务内前缀 /user；
+ * 浏览器发的是 /api/user/**，/api 前缀由网关的 StripPrefix 去掉）。
  *
  * 这一层只写"接口地址 + 参数"，不做业务判断、不碰 store：
  * 后端路由的增删改查全在这里对齐，store 的 actions 只调用这里导出的函数。

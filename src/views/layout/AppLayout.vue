@@ -2,12 +2,15 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
+import useMainStore from '@/store/modules/main'
+
 /**
  * 应用布局：顶部导航 + 内容区，作为所有页面的父路由组件。
  * 导航项直接从路由表的 meta.nav 里生成，加页面时只改 router/index.js 一处。
  */
 const route = useRoute()
 const router = useRouter()
+const mainStore = useMainStore()
 
 const navItems = computed(() =>
   router
@@ -15,6 +18,19 @@ const navItems = computed(() =>
     .filter((item) => item.meta?.nav)
     .map((item) => ({ path: item.path, title: item.meta.title }))
 )
+
+/**
+ * 页脚显示的部署信息，刻意**不写死端口**：
+ *  - 容器化部署：nginx 回的 X-Backend-Origin / X-Frontend-Env 就是当前真实的链路，直接显示；
+ *  - 本机 npm run dev：没有这两个头，只说明走开发代理，具体目标见 vite.config.js 的 BACKEND_ORIGIN。
+ */
+const deployText = computed(() => {
+  if (!mainStore.backendOrigin) {
+    return '后端：mini-spring-cloud-project（网关，本机开发经 Vite 代理 /api 转发）'
+  }
+  const env = mainStore.frontendEnv ? ` · 环境 ${mainStore.frontendEnv}` : ''
+  return `后端：mini-spring-cloud-project（网关）· 反代目标 ${mainStore.backendOrigin}（来自 Nacos）${env}`
+})
 </script>
 
 <template>
@@ -43,7 +59,7 @@ const navItems = computed(() =>
     </main>
 
     <footer class="layout__footer">
-      后端：mini-spring-boot-project · http://localhost:8080 · 前端开发代理前缀 /api
+      {{ deployText }}
     </footer>
   </div>
 </template>

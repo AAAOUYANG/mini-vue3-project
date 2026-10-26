@@ -62,7 +62,8 @@ onMounted(() => {
       <h2 class="card__title">层次分明的 Vue3 极简项目</h2>
       <p class="card__desc">
         技术栈 vue3 + vite + vue-router + pinia + axios，后端对接
-        <strong>mini-spring-boot-project</strong>（Spring Boot 2.7 + MyBatis-Plus，端口 8080）。
+        <strong>mini-spring-cloud-project</strong>（微服务：网关 <code>mini-gateway</code> +
+        用户 / 订单服务，Nacos 注册与配置中心），前端只发相对路径 <code>/api/**</code>，由网关转发。
         架构按"资源 / 复用组件 / 逻辑 / 请求 / 状态 / 路由 / 页面"分层，每层只做一件事：
         页面不直接发请求，请求走 store 的 actions，store 调 services 里的接口函数。
       </p>
@@ -81,13 +82,15 @@ onMounted(() => {
       </div>
 
       <p v-if="healthStore.isOk" class="card__desc health__detail">
-        探测接口 <code>GET /user/page?pageNum=1&amp;pageSize=1</code> 正常，当前共有
+        探测接口 <code>GET /api/user/page?pageNum=1&amp;pageSize=1</code> 正常，当前共有
         <strong>{{ healthStore.total }}</strong> 条用户数据（含已软删除数据之外的全部未删除记录）。
       </p>
       <p v-else-if="healthStore.status === 'fail'" class="card__desc health__detail health__detail--fail">
         {{ healthStore.message }}
         <br />
-        请在 backend 目录执行 <code>./mvnw spring-boot:run</code> 启动 mini-spring-boot-project（需要本地 MySQL）。
+        请先启动后端：在 <code>../mini-spring-cloud-project</code> 里起基础设施（<code>docker/infra</code>）
+        与三个应用（<code>docker/app</code>，网关监听 <code>http://localhost:9000</code>）——
+        详见该仓库 README 的「方式 A 混合模式 / 方式 B 全容器化」。
       </p>
       <p v-if="healthStore.checkedAt" class="card__desc health__detail">
         最近检测时间：{{ healthStore.checkedAt }}

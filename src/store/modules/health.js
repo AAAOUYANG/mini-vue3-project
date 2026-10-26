@@ -5,11 +5,11 @@ import { BASE_URL } from '@/services/request/config'
 import { formatDuration, toNumber } from '@/utils/format'
 
 /**
- * 后端连通性自检：首页用它判断 mini-spring-boot-project 是否已经启动、接口前缀是否配通。
+ * 后端连通性自检：首页用它判断 mini-spring-cloud-project（网关）是否已经启动、接口前缀是否配通。
  * 同样是"组件不发请求"：首页只读状态、只调 action。
  *
  * 探测方式选 /user/page?pageNum=1&pageSize=1：它是纯读接口，代价最小，
- * 又能同时验证「路由可达 + 统一响应体 + 分页结构」三件事。
+ * 又能同时验证「路由可达 + 统一响应体 + 分页结构」三件事。（浏览器实际发的是 /api/user/page…，前缀由环境决定）
  */
 const useHealthStore = defineStore('health', {
   state: () => ({
